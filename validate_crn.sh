@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# This script validates an IBM CRN based off the specification: 
+# This script validates an IBM CRN based off the specification:
 #     https://github.ibm.com/ibmcloud/builders-guide/blob/master/specifications/crn/CRN.md
 #
 # Usage: ${0} <crn>
@@ -30,7 +30,7 @@ function in_array
 {
     local element=${1}
     shift
-    local array=(${@})
+    local array=("${@}")
     for i in "${array[@]}"; do
         if [[ "${i}" == "${element}" ]]; then
             return 0
@@ -46,7 +46,6 @@ function valid_crn
     # https://github.ibm.com/ibmcloud/builders-guide/blob/master/specifications/crn/CRN.md
     local crn=${1}
 
-    local valid_versions=("v1")
     local valid_cnames=("bluemix" "internal" "staging") # can also be a customerID
     local valid_ctypes=("public" "dedicated" "local")
     local valid_geos=("us" "eu" "au" "jp" "cn")
@@ -57,53 +56,56 @@ function valid_crn
                        "WDC04" "WDC06" "WDC07")
     local valid_locations=("global" "${valid_geos[@]}" "${valid_regions[@]}" "${valid_zones[@]}")
 
+    local errors=()
+
+    # Split the CRN
     IFS=':' read -r -a crn_a <<< "${crn}"
 
     # Validate CRN - crn_a[0]
     if [[ "${crn_a[0]}" != "crn" ]]; then
-        echo "ERROR: Invalid CRN - must start with 'crn'"
-        exit 1
+        errors[0]="must start with 'crn'"
+#        exit 1
     fi
 
     # Validate version - crn_a[1]
     #if ! in_array "${crn_a[1]}" "${valid_versions[@]}"; then
     if [[ ! "${crn_a[1]}" =~ ^v[1-9][0-9]*$ ]]; then
-        echo "ERROR: Invalid CRN - bad version [${crn_a[1]}]. Must be in the form 'vX'"
-        exit 1
+        errors[1]="version [${crn_a[1]}] - Must be in the form 'vX'"
+#        exit 1
     fi
 
     # Validate ctype & cname - crn_a[3] & crn_a[2]
     if [[ "${crn_a[3]}" == "public" ]]; then
         # Check for valid cname
         if ! in_array "${crn_a[2]}" "${valid_cnames[@]}"; then
-            echo "ERROR: Invalid CRN - bad cname [${crn_a[2]}]. Must be one of: ${valid_cnames[@]}"
-            exit 1
+            errors[2]="cname [${crn_a[2]}] - Must be one of: ${valid_cnames[*]}"
+#            exit 1
         fi
     elif [[ "${crn_a[3]}" == "dedicated" || "${crn_a[3]}" == "local" ]]; then
         # Check for valid customerID - SHOULD be alphanumeric with no spaces or special characters other than '-'
         if [[ "${crn_a[2]}" =~ \  ]]; then
-            echo "ERROR: Invalid CRN - bad cname [${crn_a[2]}]. Can not contain any spaces."
-            exit 1
+            errors[2]="cname [${crn_a[2]}] - Can not contain any spaces."
+#            exit 1
         elif [[ ! "${crn_a[2]}" =~ ^[a-zA-Z0-9-]+$ ]]; then
-            echo "ERROR: Invalid CRN - bad cname [${crn_a[2]}]. Can not contain any special characters, only [a-z A-Z 0-9 -]"
-            exit 1
+            errors[2]="cname [${crn_a[2]}] - Can not contain any special characters, only [a-z A-Z 0-9 -]"
+#            exit 1
         fi
     else
-        echo "ERROR: Invalid CRN - bad ctype [${crn_a[3]}]. Must be one of: ${valid_ctypes[@]}"
-        exit 1
+        errors[3]="ctype [${crn_a[3]}] - Must be one of: ${valid_ctypes[*]}"
+#        exit 1
     fi
 
     # Validate service-name - crn_a[4]
     # service-name MUST be unique globally and MUST be alphanumeric, lower case, no spaces or special characters other than '-'
     if [[ ! "${crn_a[4]}" =~ ^[a-z0-9-]+$ ]]; then
-        echo "ERROR: Invalid CRN - bad service-name [${crn_a[4]}]. Must be lowercase and not contain any special characters except for '-'"
-        exit 1
+        errors[4]="service-name [${crn_a[4]}] - Must be lowercase and not contain any special characters except for '-'"
+#        exit 1
     fi
 
     # Validate location - crn_a[5]
     if ! in_array "${crn_a[5]}" "${valid_locations[@]}"; then
-        echo "ERROR: Invalid CRN - invalid location [${crn_a[5]}]. Must be one of: ${valid_locations[@]}"
-        exit 1
+        errors[5]="location [${crn_a[5]}] - Must be one of: ${valid_locations[*]}"
+#        exit 1
     fi
 
     # Validate scope - crn_a[6]
@@ -111,28 +113,29 @@ function valid_crn
     local scope="${crn_a[6]}"
     if [[ ${scope} != '' ]]; then  # it can be empty
         if [[ ! "${scope}" =~ / ]]; then
-            echo "ERROR: Invalid CRN - invalid scope; Missing '/'"
-            exit 1
-        fi
-        # split into {scope_prefix}/{scope_id}
-        IFS='/' read -r -a scope_a <<< "${scope}"
-        local scope_prefix="${scope_a[0]}"
-        local scope_id="${scope_a[1]}"
+            errors[6]="scope [${scope}] - Missing '/'"
+#            exit 1
+        else
+            # split into {scope_prefix}/{scope_id}
+            IFS='/' read -r -a scope_a <<< "${scope}"
+            local scope_prefix="${scope_a[0]}"
+            local scope_id="${scope_a[1]}"
 
-        if [[ ! ${scope_prefix} =~ ^[aos] ]]; then
-            echo "ERROR: Invalid CRN - invalid scope - bad prefix [${scope_prefix}]; Must be 'a' (Account), 'o' (Organization), or 's' (Space)"
-            exit 1
-        fi
-
-        # ID should be a GUID - w/o '-' if accountID (32 chars) otherwise 36 chars
-        if ! valid_guid ${scope_id}; then
-            echo -n "ERROR: Invalid CRN - invalid scope - bad id [${scope_id}]; Can only contain the characters [a-f, 0-9, -]"
-            case "${scope_prefix}" in
-                "a") echo -n "Must be a valid account ID (ex. 1234567890abcdef1234567890abcdef). " ;;
-                "o") echo -n "Must be a valid organization GUID (ex. 12345678-90ab-cdef-1234-567890abcdef). " ;;
-                "s") echo -n "Must be a valid scope GUID (ex. 12345678-90ab-cdef-1234-567890abcdef). " ;;
-            esac
-            exit 1
+            if [[ ! ${scope_prefix} =~ ^[aos] ]]; then
+                errors[6]="scope [${scope_prefix}] - Invalid scope prefix, must be 'a' (Account), 'o' (Organization), or 's' (Space)"
+    #            exit 1
+            else
+                # ID should be a GUID - w/o '-' if accountID (32 chars) otherwise 36 chars
+                if ! valid_guid ${scope_id}; then
+                    errors[6]="scope [${scope_id}] - Invalid scope ID; can only contain the characters [a-f, 0-9, -]. "
+                    case "${scope_prefix}" in
+                        "a") errors[6]+="Must be a valid account ID (ex. 1234567890abcdef1234567890abcdef). " ;;
+                        "o") errors[6]+="Must be a valid organization GUID (ex. 12345678-90ab-cdef-1234-567890abcdef). " ;;
+                        "s") errors[6]+="Must be a valid scope GUID (ex. 12345678-90ab-cdef-1234-567890abcdef). " ;;
+                    esac
+        #            exit 1
+                fi
+            fi
         fi
     fi
 
@@ -142,10 +145,12 @@ function valid_crn
     if [[ "${si}" != '' ]]; then  # it can be empty
         if [[ "${si}" =~ / ]]; then # it's a URI, the root should be a guid
             # validate the uri
-            valid_uri ${si} || { echo "ERROR: Invalid CRN; service-instance [${si}] has an invalid URI format"; exit 1; }
+#            valid_uri ${si} || { echo "ERROR: Invalid CRN; service-instance [${si}] has an invalid URI format"; exit 1; }
+            valid_uri ${si} || errors[7]="service-instance [${si}] - Invalid URI format"
         else
             # Check for GUID
-            valid_guid ${si} || { echo "ERROR: Invalid CRN; service-instance [${si}] MUST contain a valid GUID"; exit 1; }
+#            valid_guid ${si} || { echo "ERROR: Invalid CRN; service-instance [${si}] MUST contain a valid GUID"; exit 1; }
+            valid_guid ${si} || errors[7]="service-instance [${si}] - MUST contain a valid GUID"
         fi
     fi
 
@@ -154,8 +159,8 @@ function valid_crn
     local rt="${crn_a[8]}"
     if [[ ${rt} != '' ]]; then  # it can be empty
         if [[ ! "${rt}" =~ ^[a-z0-9-]+$ ]]; then
-            echo "ERROR: Invalid CRN - bad resource-type [${rt}]. Must be lowercase and not contain any special characters except for '-'"
-            exit 1
+            errors[8]="resource-type [${rt}]. Must be lowercase and not contain any special characters except for '-'"
+#            exit 1
         fi
 
     fi
@@ -166,20 +171,37 @@ function valid_crn
     if [[ ${resource} != '' ]]; then  # it can be empty
         if [[ "${resource}" =~ / ]]; then # it's a URI, the root should be a guid
             # validate the uri
-            valid_uri ${resource} || { echo "ERROR: Invalid CRN; resourece [${resource}] has an invalid URI format"; exit 1; }
+#            valid_uri ${resource} || { echo "ERROR: Invalid CRN; resourece [${resource}] has an invalid URI format"; exit 1; }
+            valid_uri ${resource} || errors[9]="resource [${resource}] - Invalid URI format"
         else
             # check for GUID
-            valid_guid ${resource_guid} || { echo "ERROR: Invalid CRN; resource [${resource}] MUST contain a valid GUID"; exit 1; }
+#            valid_guid ${resource} || { echo "ERROR: Invalid CRN; resource [${resource}] MUST contain a valid GUID"; exit 1; }
+            valid_guid ${resource} || errors[9]="resource [${resource}] - MUST contain a valid GUID"
         fi
+    fi
+
+    if [[ ${#errors[*]} -eq 0 ]]; then
+        return 0
+    else
+        echo "ERROR: Invalid CRN"
+        echo "The CRN [${crn}] had the following errors:"
+        for e in "${errors[@]}"; do
+            echo "  * ${e}"
+        done
+        if [[ ${#crn_a[*]} -gt 10 ]]; then
+            echo "  * CRN too long; Should only contain 10 elements:"
+            echo "        crn:version:cname:ctype:service-name:location:scope:service-instance:resource-type:resource"
+        fi
+        return 1
     fi
 
 }
 
+# Main
 crn="${1}"
 if [[ "${crn}" == "" ]]; then
     echo "CRN required as a parameter."
     echo "CRN format: crn:version:cname:ctype:service-name:location:scope:service-instance:resource-type:resource"
     exit 1
 fi
-valid_crn ${crn} || { echo "Not Valid"; exit 1; }
-echo "OK"
+valid_crn ${crn} && echo "OK"
